@@ -1,4 +1,6 @@
-import pyaudio, math, struct, audioop, wave
+import pyaudio
+# stdlibs
+import math, struct, audioop, wave
 
 class listenAudioHandler:
     # author: previoip
@@ -15,6 +17,7 @@ class listenAudioHandler:
         self.noisycount = 0
         self.errorcount = 0
         self.tapcount = 0
+        self.const_sensitivity_tuner = 0.1
         self.waveform_queue = [None for _ in range(10)]
 
         # defaults
@@ -28,7 +31,7 @@ class listenAudioHandler:
         self.select_device()
 
     def set_opt(self, **kwargs):
-        opts = {'channels', 'tap_threshold', 'sample_rate', 'input_block_time',}
+        opts = {'channels', 'tap_threshold', 'sample_rate', 'input_block_time', 'const_sensitivity_tuner'}
         self.__dict__.update((k, v) for k, v in kwargs.items() if k in opts)
         self.input_frame_blocksize = int(self.input_block_time * self.sample_rate)
         self.__const_oversensitive = 15.0 / self.input_block_time
@@ -71,8 +74,8 @@ class listenAudioHandler:
         # iterate for all possible device instances
         for i in range(0, num_devices):
             if(self.pa.get_device_info_by_host_api_device_index(0,i).get('maxInputChannels')):
-                dname = self.pa.get_device_info_by_host_api_device_index(0, i).get('name')
-                print(f'input device: {i} - {dname}')
+                device_name = self.pa.get_device_info_by_host_api_device_index(0, i).get('name')
+                print(f'input device: {i} - {device_name}')
 
         # prompt for device index
         index = int(input('Enter device index: '))
@@ -97,16 +100,19 @@ class listenAudioHandler:
 
         # begin listening input
     def listen(self):
+        is_tap_detected = False
+        full_block = None
+
         try:
             block = self.stream.read(self.input_frame_blocksize)
-            self.waveform_queue.append(block)
-            self.waveform_queue.pop(0)
         except IOError as e:
             self.errorcount += 1
             print( "(%d) Error recording: %s"%(self.errorcount,e) )
             self.noisycount = 1
-            return
+            return (is_tap_detected, full_block)
 
+        self.waveform_queue.append(block)
+        self.waveform_queue.pop(0)
         amp = self.__get_rms(block)
 
         if amp > self.tap_threshold:
@@ -114,15 +120,17 @@ class listenAudioHandler:
             self.quietcount = 0
             self.noisycount += 1
             if self.noisycount > self.__const_oversensitive:
-                self.tap_threshold *= 1.1
+                self.tap_threshold *= (1 + self.const_sensitivity_tuner)
         else:            
             if 1 <= self.noisycount <= self.__max_tap_block:
                 self.tapcount += 1
-                self.get_waveform_from_queue()
+                full_block = self.get_waveform_from_queue()
+                is_tap_detected = True
+
             self.quietcount += 1
             self.noisycount = 0
             if self.quietcount > self.__const_undersensitive:
-                self.tap_threshold *= 0.9
+                self.tap_threshold *= (1 - self.const_sensitivity_tuner)
         
         if self.__verbose: 
             str_amp = f"amplitude: {'{:.4f}'.format(amp)}"
@@ -132,21 +140,28 @@ class listenAudioHandler:
             str_queueLen = f"cache: {len(self.waveform_queue)}"
             str_volume = f"|| {'#'*int(amp*100/2)}"
             print(str_amp, str_nquiet, str_nnoise, str_ntap, str_queueLen, str_volume)
+            
+        return (is_tap_detected, full_block)
 
+        
     def get_waveform_from_queue(self):
-        for _ in range(3):
+        nums = 5
+        print(f'writing audio waveform for next {self.input_block_time * nums} seconds...')
+        for _ in range(nums):
             block = self.stream.read(self.input_frame_blocksize)
             self.waveform_queue.append(block)
         data_frame = b''.join(self.waveform_queue)
-        wf = wave.open('cache/cache.wav', 'wb')
-        wf.setnchannels(self.channels)
-        wf.setsampwidth(self.pa.get_sample_size(self.format))
-        wf.setframerate(self.sample_rate)
-        wf.writeframes(data_frame)
-        wf.close()
-        return
+        for _ in range(nums):
+            self.waveform_queue.pop(0)
+        # wf = wave.open('cache/cache.wav', 'wb')
+        # wf.setnchannels(self.channels)
+        # wf.setsampwidth(self.pa.get_sample_size(self.format))
+        # wf.setframerate(self.sample_rate)
+        # wf.writeframes(data_frame)
+        # wf.close()
+        return data_frame
 
-        # abrupt stop handler
+        # abort handler
     def abort(self):
         self.stream.stop_stream()
         self.stream.close()
