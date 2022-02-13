@@ -138,8 +138,9 @@ class listenAudioHandler:
             str_nnoise = f"n_noisy:{self.noisycount}{' '*(4-len(str(self.noisycount)))}"
             str_ntap = f"tap:{self.tapcount}"
             str_queueLen = f"cache: {len(self.waveform_queue)}"
+            str_thresh = f"thresh: {self.tap_threshold}"
             str_volume = f"|| {'#'*int(amp*100/2)}"
-            print(str_amp, str_nquiet, str_nnoise, str_ntap, str_queueLen, str_volume)
+            print(str_amp, str_nquiet, str_nnoise, str_ntap, str_thresh, str_volume)
             
         return (is_tap_detected, full_block)
 
